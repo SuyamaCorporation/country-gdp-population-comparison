@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>国別 GDP・人口 比較 ビジュアル</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
+<header class="bg-gray-800 px-4 py-3 shadow">
+  <h1 class="text-xl font-bold text-teal-400">国別 GDP・人口 比較 ビジュアル</h1>
+</header>
+<main class="flex flex-1 gap-4 p-4 overflow-hidden" style="height:calc(100vh - 56px)">
+  <!-- 左パネル -->
+  <aside class="w-64 flex flex-col gap-3 overflow-y-auto" aria-label="フィルタ・表示設定">
+    <section class="bg-gray-800 rounded-lg p-3">
+      <h2 class="text-sm font-semibold text-teal-300 mb-2">表示モード</h2>
+      <div class="flex gap-1 flex-wrap">
+        <button id="mode-bubble"
+          class="text-xs rounded px-2 py-1 bg-teal-700 font-semibold transition"
+          aria-pressed="true">バブルチャート</button>
+        <button id="mode-gdp"
+          class="text-xs rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 transition"
+          aria-pressed="false">棒グラフ GDP順</button>
+        <button id="mode-pop"
+          class="text-xs rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 transition"
+          aria-pressed="false">棒グラフ 人口順</button>
+      </div>
+    </section>
+
+    <section class="bg-gray-800 rounded-lg p-3">
+      <h2 class="text-sm font-semibold text-teal-300 mb-2">地域フィルタ</h2>
+      <div id="region-filters" class="flex flex-wrap gap-1"></div>
+    </section>
+
+    <section class="bg-gray-800 rounded-lg p-3">
+      <h2 class="text-sm font-semibold text-teal-300 mb-1">国選択フィルタ</h2>
+      <input type="text" id="country-search"
+        class="w-full bg-gray-700 text-xs text-gray-100 rounded px-2 py-1 border border-gray-600 focus:border-teal-500 focus:outline-none mb-2"
+        placeholder="国名を入力..."
+        aria-label="国名検索">
+      <div id="country-list" class="flex flex-col gap-1 max-h-48 overflow-y-auto"></div>
+    </section>
+
+    <div class="flex gap-2">
+      <button id="select-all-btn"
+        class="flex-1 text-xs bg-teal-800 hover:bg-teal-700 rounded px-2 py-1 transition"
+        aria-label="全国選択">全選択</button>
+      <button id="save-btn"
+        class="flex-1 text-xs bg-green-700 hover:bg-green-600 rounded px-2 py-1 transition"
+        aria-label="設定保存">保存</button>
+    </div>
+
+    <section class="bg-gray-800 rounded-lg p-3">
+      <h2 class="text-sm font-semibold text-teal-300 mb-1">凡例（地域）</h2>
+      <div id="legend" class="flex flex-col gap-1 text-xs"></div>
+    </section>
+  </aside>
+
+  <!-- Canvas -->
+  <div class="flex-1 relative bg-gray-950 rounded-lg overflow-hidden" id="canvas-wrap">
+    <canvas id="main-canvas" class="w-full h-full" role="img" aria-label="GDP・人口バブルチャート"></canvas>
+    <div id="tooltip"
+      class="absolute hidden bg-gray-800 border border-teal-500 text-xs text-teal-100 px-3 py-2 rounded-lg pointer-events-none shadow-lg"
+      aria-live="polite"></div>
+  </div>
+</main>
+
+<script>
+(function() {
+  'use strict';
+
+  const STORAGE_KEY = 'gdpPopState_v1';
+
+  // Data: GDP (trillion USD 2023 est), Population (millions), GDP per capita (thousands USD)
+  const COUNTRIES = [
+    // G20 + major
+    { name: 'アメリカ',   code: 'US', region: 'Americas',    gdp: 25.5,  pop: 335,  gpc: 76.1 },
+    { name: '中国',       code: 'CN', region: 'Asia',        gdp: 17.7,  pop: 1412, gpc: 12.5 },
+    { name: '日本',       code: 'JP', region: 'Asia',        gdp: 4.23,  pop: 125,  gpc: 33.8 },
+    { name: 'ドイツ',     code: 'DE', region: 'Europe',      gdp: 4.07,  pop: 84,   gpc: 48.4 },
+    { name: 'インド',     code: 'IN', region: 'Asia',        gdp: 3.39,  pop: 1425, gpc: 2.38 },
+    { name: 'イギリス',   code: 'GB', region: 'Europe',      gdp: 3.07,  pop: 67,   gpc: 45.8 },
+    { name: 'フランス',   code: 'FR', region: 'Europe',      gdp: 2.78,  pop: 68,   gpc: 40.9 },
+    { name: 'カナダ',     code: 'CA', region: 'Americas',    gdp: 2.14,  pop: 38,   gpc: 55.5 },
+    { name: 'ロシア',     code: 'RU', region: 'Europe',      gdp: 2.24,  pop: 143,  gpc: 15.7 },
+    { name: 'イタリア',   code: 'IT', region: 'Europe',      gdp: 2.01,  pop: 59,   gpc: 34.1 },
+    { name: '韓国',       code: 'KR', region: 'Asia',        gdp: 1.67,  pop: 52,   gpc: 32.3 },
+    { name: 'ブラジル',   code: 'BR', region: 'Americas',    gdp: 1.92,  pop: 215,  gpc: 8.9  },
+    { name: 'オーストラリア', code: 'AU', region: 'Oceania', gdp: 1.69,  pop: 26,   gpc: 65.0 },
+    { name: 'スペイン',   code: 'ES', region: 'Europe',      gdp: 1.43,  pop: 47,   gpc: 30.4 },
+    { name: 'メキシコ',   code: 'MX', region: 'Americas',    gdp: 1.32,  pop: 128,  gpc: 10.3 },
+    { name: 'インドネシア', code: 'ID', region: 'Asia',      gdp: 1.32,  pop: 278,  gpc: 4.75 },
+    { name: 'サウジアラビア', code: 'SA', region: 'Middle East', gdp: 1.06, pop: 36, gpc: 29.4 },
+    { name: 'トルコ',     code: 'TR', region: 'Middle East', gdp: 1.03,  pop: 85,   gpc: 12.1 },
+    { name: 'アルゼンチン', code: 'AR', region: 'Americas',  gdp: 0.63,  pop: 46,   gpc: 13.7 },
+    { name: '南アフリカ', code: 'ZA', region: 'Africa',      gdp: 0.41,  pop: 60,   gpc: 6.8  },
+    // additional 10
+    { name: 'スウェーデン', code: 'SE', region: 'Europe',    gdp: 0.59,  pop: 11,   gpc: 55.8 },
+    { name: 'スイス',     code: 'CH', region: 'Europe',      gdp: 0.82,  pop: 9,    gpc: 93.7 },
+    { name: 'ノルウェー', code: 'NO', region: 'Europe',      gdp: 0.58,  pop: 5,    gpc: 107. },
+    { name: 'オランダ',   code: 'NL', region: 'Europe',      gdp: 1.01,  pop: 17,   gpc: 59.3 },
+    { name: 'タイ',       code: 'TH', region: 'Asia',        gdp: 0.54,  pop: 71,   gpc: 7.6  },
+    { name: 'ポーランド', code: 'PL', region: 'Europe',      gdp: 0.69,  pop: 38,   gpc: 18.2 },
+    { name: 'ナイジェリア', code: 'NG', region: 'Africa',    gdp: 0.47,  pop: 220,  gpc: 2.1  },
+    { name: 'エジプト',   code: 'EG', region: 'Africa',      gdp: 0.40,  pop: 105,  gpc: 3.8  },
+    { name: 'ベトナム',   code: 'VN', region: 'Asia',        gdp: 0.41,  pop: 98,   gpc: 4.2  },
+    { name: 'アラブ首長国連邦', code: 'AE', region: 'Middle East', gdp: 0.50, pop: 10, gpc: 49.4 },
+  ];
+
+  const REGION_COLORS = {
+    'Americas':    '#60a5fa',
+    'Asia':        '#4ade80',
+    'Europe':      '#f472b6',
+    'Oceania':     '#facc15',
+    'Middle East': '#fb923c',
+    'Africa':      '#a78bfa',
+  };
+
+  const canvas = document.getElementById('main-canvas');
+  const ctx = canvas.getContext('2d');
+  const wrap = document.getElementById('canvas-wrap');
+  const tooltip = document.getElementById('tooltip');
+
+  let mode = 'bubble';
+  let selectedCountries = new Set(COUNTRIES.map(c => c.code));
+  let selectedRegions = new Set(Object.keys(REGION_COLORS));
+
+  /* ---------- Storage ---------- */
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        mode,
+        selectedCountries: [...selectedCountries],
+        selectedRegions: [...selectedRegions],
+      }));
+    } catch(e) {}
+  }
+  function loadState() {
+    try {
+      const d = localStorage.getItem(STORAGE_KEY);
+      if (!d) return;
+      const s = JSON.parse(d);
+      if (s.mode) mode = s.mode;
+      if (s.selectedCountries) selectedCountries = new Set(s.selectedCountries);
+      if (s.selectedRegions) selectedRegions = new Set(s.selectedRegions);
+    } catch(e) {}
+  }
+
+  /* ---------- Filter ---------- */
+  function filteredData() {
+    return COUNTRIES.filter(c => selectedCountries.has(c.code) && selectedRegions.has(c.region));
+  }
+
+  /* ---------- UI Build ---------- */
+  function buildRegionFilters() {
+    const div = document.getElementById('region-filters');
+    while (div.firstChild) div.removeChild(div.firstChild);
+    Object.entries(REGION_COLORS).forEach(([region, color]) => {
+      const btn = document.createElement('button');
+      btn.textContent = region;
+      btn.className = `text-xs rounded px-2 py-1 transition font-semibold`;
+      btn.style.background = selectedRegions.has(region) ? color + '88' : '#374151';
+      btn.style.color = selectedRegions.has(region) ? '#fff' : '#9ca3af';
+      btn.setAttribute('aria-pressed', selectedRegions.has(region) ? 'true' : 'false');
+      btn.addEventListener('click', () => {
+        if (selectedRegions.has(region)) selectedRegions.delete(region);
+        else selectedRegions.add(region);
+        buildRegionFilters();
+        buildCountryList();
+        render();
+      });
+      div.appendChild(btn);
+    });
+  }
+
+  function buildLegend() {
+    const div = document.getElementById('legend');
+    while (div.firstChild) div.removeChild(div.firstChild);
+    Object.entries(REGION_COLORS).forEach(([region, color]) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      const dot = document.createElement('span');
+      dot.style.cssText = `width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0`;
+      const label = document.createElement('span');
+      label.textContent = region;
+      label.className = 'text-gray-300';
+      row.appendChild(dot);
+      row.appendChild(label);
+      div.appendChild(row);
+    });
+  }
+
+  function buildCountryList(filter = '') {
+    const div = document.getElementById('country-list');
+    while (div.firstChild) div.removeChild(div.firstChild);
+    const q = filter.toLowerCase();
+    COUNTRIES.filter(c => !q || c.name.includes(q) || c.code.toLowerCase().includes(q)).forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-1';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selectedCountries.has(c.code);
+      cb.setAttribute('aria-label', c.name);
+      cb.className = 'accent-teal-400';
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedCountries.add(c.code);
+        else selectedCountries.delete(c.code);
+        render();
+      });
+
+      const label = document.createElement('label');
+      label.textContent = c.name;
+      label.className = 'text-xs text-gray-300 cursor-pointer';
+      label.addEventListener('click', () => { cb.click(); });
+
+      row.appendChild(cb);
+      row.appendChild(label);
+      div.appendChild(row);
+    });
+  }
+
+  document.getElementById('country-search').addEventListener('input', (e) => {
+    buildCountryList(e.target.value);
+  });
+
+  document.getElementById('select-all-btn').addEventListener('click', () => {
+    if (selectedCountries.size === COUNTRIES.length) {
+      selectedCountries.clear();
+    } else {
+      COUNTRIES.forEach(c => selectedCountries.add(c.code));
+    }
+    buildCountryList();
+    render();
+  });
+
+  document.getElementById('save-btn').addEventListener('click', () => {
+    saveState();
+    const btn = document.getElementById('save-btn');
+    btn.textContent = '保存済み✓';
+    setTimeout(() => { btn.textContent = '保存'; }, 1500);
+  });
+
+  /* ---------- Mode buttons ---------- */
+  const modeBtns = {
+    bubble: document.getElementById('mode-bubble'),
+    gdp: document.getElementById('mode-gdp'),
+    pop: document.getElementById('mode-pop'),
+  };
+  Object.entries(modeBtns).forEach(([m, btn]) => {
+    btn.addEventListener('click', () => {
+      mode = m;
+      Object.entries(modeBtns).forEach(([k, b]) => {
+        b.className = k === m
+          ? 'text-xs rounded px-2 py-1 bg-teal-700 font-semibold transition'
+          : 'text-xs rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 transition';
+        b.setAttribute('aria-pressed', k === m ? 'true' : 'false');
+      });
+      render();
+    });
+  });
+
+  /* ---------- Render ---------- */
+  function resize() {
+    canvas.width = wrap.clientWidth;
+    canvas.height = wrap.clientHeight;
+    render();
+  }
+
+  function render() {
+    if (mode === 'bubble') renderBubble();
+    else renderBar();
+  }
+
+  function renderBubble() {
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#05050f';
+    ctx.fillRect(0, 0, W, H);
+
+    const data = filteredData();
+    if (!data.length) return;
+
+    const pad = { l: 70, r: 30, t: 30, b: 60 };
+    const cW = W - pad.l - pad.r;
+    const cH = H - pad.t - pad.b;
+
+    const maxGDP = Math.max(...data.map(c => c.gdp));
+    const maxGPC = Math.max(...data.map(c => c.gpc));
+    const maxPop = Math.max(...data.map(c => c.pop));
+
+    function cx(c) { return pad.l + (c.gdp / maxGDP) * cW; }
+    function cy(c) { return pad.t + cH - (c.gpc / maxGPC) * cH; }
+    function cr(c) { return 6 + Math.sqrt(c.pop / maxPop) * 30; }
+
+    // Grid
+    ctx.strokeStyle = '#1e2a3a';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 4]);
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.t + cH * i / 4;
+      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cW, y); ctx.stroke();
+      const label = ((1 - i / 4) * maxGPC).toFixed(0);
+      ctx.fillStyle = '#4a6070'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+      ctx.fillText(label + 'k', pad.l - 4, y + 3);
+    }
+    for (let i = 0; i <= 4; i++) {
+      const x = pad.l + cW * i / 4;
+      ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + cH); ctx.stroke();
+      const label = (i / 4 * maxGDP).toFixed(1);
+      ctx.fillStyle = '#4a6070'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(label + 'T', x, pad.t + cH + 14);
+    }
+    ctx.setLineDash([]);
+
+    // Axes
+    ctx.strokeStyle = '#607d8b'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + cH); ctx.lineTo(pad.l + cW, pad.t + cH);
+    ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = '#8899aa'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('GDP (兆USD)', pad.l + cW / 2, H - 4);
+    ctx.save(); ctx.translate(14, pad.t + cH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText('一人当たりGDP (千USD)', 0, 0); ctx.restore();
+
+    // Bubbles
+    data.forEach(c => {
+      const x = cx(c), y = cy(c), r = cr(c);
+      const color = REGION_COLORS[c.region] || '#aaa';
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+
+      // Label (only for larger bubbles)
+      if (r > 12) {
+        ctx.fillStyle = '#fff';
+        ctx.font = `${Math.min(11, r * 0.7)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(c.code, x, y + 3);
+      }
+    });
+
+    // Store bubble positions for hover
+    canvas._bubbleData = data.map(c => ({ c, x: cx(c), y: cy(c), r: cr(c) }));
+  }
+
+  function renderBar() {
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#05050f';
+    ctx.fillRect(0, 0, W, H);
+
+    const data = filteredData();
+    if (!data.length) return;
+
+    const sortedData = [...data].sort((a, b) =>
+      mode === 'gdp' ? b.gdp - a.gdp : b.pop - a.pop
+    );
+
+    const pad = { l: 110, r: 20, t: 20, b: 30 };
+    const cW = W - pad.l - pad.r;
+    const cH = H - pad.t - pad.b;
+    const barH = Math.max(4, cH / sortedData.length - 2);
+    const maxVal = mode === 'gdp' ? sortedData[0].gdp : sortedData[0].pop;
+
+    sortedData.forEach((c, i) => {
+      const y = pad.t + i * (cH / sortedData.length);
+      const val = mode === 'gdp' ? c.gdp : c.pop;
+      const bw = (val / maxVal) * cW;
+      const color = REGION_COLORS[c.region] || '#aaa';
+
+      ctx.fillStyle = color + 'aa';
+      ctx.fillRect(pad.l, y + 1, bw, barH);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(pad.l, y + 1, bw, barH);
+
+      ctx.fillStyle = '#d1d5db'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText(c.name, pad.l - 4, y + barH / 2 + 3);
+
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+      const label = mode === 'gdp' ? c.gdp.toFixed(2) + 'T' : c.pop.toFixed(0) + 'M';
+      ctx.fillText(label, pad.l + bw + 3, y + barH / 2 + 3);
+    });
+
+    const title = mode === 'gdp' ? 'GDP (兆USD) 降順' : '人口 (百万人) 降順';
+    ctx.fillStyle = '#94a3b8'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(title, W / 2, H - 6);
+
+    canvas._bubbleData = null;
+  }
+
+  /* ---------- Hover ---------- */
+  canvas.addEventListener('mousemove', (e) => {
+    if (!canvas._bubbleData) { tooltip.classList.add('hidden'); return; }
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
+
+    let hit = null;
+    for (const b of canvas._bubbleData) {
+      const dx = mx - b.x, dy = my - b.y;
+      if (dx * dx + dy * dy <= b.r * b.r) { hit = b.c; break; }
+    }
+
+    if (hit) {
+      tooltip.style.left = (e.clientX - canvas.getBoundingClientRect().left + 12) + 'px';
+      tooltip.style.top = (e.clientY - canvas.getBoundingClientRect().top - 80) + 'px';
+      while (tooltip.firstChild) tooltip.removeChild(tooltip.firstChild);
+
+      const lines = [
+        { label: hit.name, value: '' },
+        { label: 'GDP', value: hit.gdp.toFixed(2) + ' 兆USD' },
+        { label: '人口', value: hit.pop.toFixed(0) + ' 百万人' },
+        { label: '一人当たりGDP', value: hit.gpc.toFixed(1) + ' 千USD' },
+        { label: '地域', value: hit.region },
+      ];
+      lines.forEach((l, i) => {
+        const d = document.createElement('div');
+        if (i === 0) {
+          d.className = 'font-bold text-teal-300';
+          d.textContent = l.label;
+        } else {
+          d.className = 'text-gray-200';
+          const span1 = document.createElement('span');
+          span1.className = 'text-gray-400 mr-1';
+          span1.textContent = l.label + ':';
+          const span2 = document.createElement('span');
+          span2.textContent = l.value;
+          d.appendChild(span1);
+          d.appendChild(span2);
+        }
+        tooltip.appendChild(d);
+      });
+      tooltip.classList.remove('hidden');
+    } else {
+      tooltip.classList.add('hidden');
+    }
+  });
+
+  canvas.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
+
+  /* ---------- Init ---------- */
+  loadState();
+  buildRegionFilters();
+  buildLegend();
+  buildCountryList();
+
+  // Sync mode buttons
+  Object.entries(modeBtns).forEach(([m, btn]) => {
+    btn.className = m === mode
+      ? 'text-xs rounded px-2 py-1 bg-teal-700 font-semibold transition'
+      : 'text-xs rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 transition';
+    btn.setAttribute('aria-pressed', m === mode ? 'true' : 'false');
+  });
+
+  const ro = new ResizeObserver(resize);
+  ro.observe(wrap);
+  resize();
+})();
+</script>
+</body>
+</html>
